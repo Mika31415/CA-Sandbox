@@ -70,13 +70,13 @@ clock = pygame.time.Clock()
 # middle-click) it's the only way to reach Play/Pause, Step, Speed, Zoom, Undo/Redo,
 # Clear, Copy/Paste/Delete/RandomFill/Rotate/Mirror/Save/Load and the Settings screen.
 # =========================================================================================
-TOUCH_MODE = True # Set to False to hide the button bar entirely (e.g. always-PC builds)
+TOUCH_MODE = False # Set to False to hide the button bar entirely (e.g. always-PC builds)
 BUTTON_H = 50 # Height (in px) of a single button row
 
 # Two rows of buttons. Row 0 = core simulation controls, Row 1 = selection/clipboard/file controls.
 BUTTON_ROWS = [
-    ["Play/Pause", "Step", "Spd-", "Spd+", "Zoom-", "Zoom+", "Center", "Undo", "Redo", "Clear", "Settings"],
-    ["Mode", "Copy", "Paste", "Del", "RndFill", "RotCW", "RotCCW", "MirLR", "MirUD", "Save", "Load"],
+    ["Play/Pause", "Step", "1Spd-", "1Spd+", "10Spd-", "10Spd+", "Zoom-", "Zoom+", "Center", "Undo", "Redo", "Clear"],
+    ["Settings", "Mode", "Copy", "Paste", "Del", "RndFill", "RotCW", "RotCCW", "MirLR", "MirUD", "Save", "Load"],
 ]
 
 # Build a rect for every button label, stacking the rows above the screen bottom.
@@ -123,10 +123,14 @@ def handle_touch_button(pos):
             if not active: # Only allow manual stepping while paused, same rule as the 'n' hotkey
                 manage_history("step")
                 chunk_grid.step(birth_values, survive_values)
-        elif label == "Spd-":
+        elif label == "1Spd-":
             GpS = max(1, GpS - 1)
-        elif label == "Spd+":
+        elif label == "1Spd+":
             GpS = min(1000, GpS + 1)
+        elif label == "10Spd-":
+            GpS = max(1, GpS - 10)
+        elif label == "10Spd+":
+            GpS = min(1000, GpS + 10)
         elif label == "Zoom-":
             zoom = max(MIN_ZOOM, zoom / 1.2)
         elif label == "Zoom+":
