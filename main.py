@@ -63,57 +63,271 @@ pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 
-# ---------------- Touch Controls (Handy) ----------------
-TOUCH_MODE = True # False = No Buttons (e.g. PC)
-BUTTON_H = 60
-BUTTON_LABELS = ["Play/Pause", "Step", "Spd-", "Spd+", "Zoom-", "Zoom+", "Center", "Undo", "Redo", "Clear"]
-BUTTON_W = WIDTH // len(BUTTON_LABELS)
-BUTTON_RECTS = [pygame.Rect(i * BUTTON_W, HEIGHT - BUTTON_H, BUTTON_W, BUTTON_H) for i in range(len(BUTTON_LABELS))]
-touch_font = pygame.font.SysFont(None, 20)
-active_fingers = {} # finger_id -> (x, y) for Drag with 2 Fingers
+# =========================================================================================
+# ---------------- Touch Controls (Phone / Pydroid 3) ----------------
+# This whole section is additive: on PC it just draws an extra button bar that you
+# can ignore (or disable via TOUCH_MODE = False). On a phone (no keyboard/mouse-wheel/
+# middle-click) it's the only way to reach Play/Pause, Step, Speed, Zoom, Undo/Redo,
+# Clear, Copy/Paste/Delete/RandomFill/Rotate/Mirror/Save/Load and the Settings screen.
+# =========================================================================================
+TOUCH_MODE = True # Set to False to hide the button bar entirely (e.g. always-PC builds)
+BUTTON_H = 50 # Height (in px) of a single button row
 
-# Draw each button
+# Two rows of buttons. Row 0 = core simulation controls, Row 1 = selection/clipboard/file controls.
+BUTTON_ROWS = [
+    ["Play/Pause", "Step", "Spd-", "Spd+", "Zoom-", "Zoom+", "Center", "Undo", "Redo", "Clear", "Settings"],
+    ["Mode", "Copy", "Paste", "Del", "RndFill", "RotCW", "RotCCW", "MirLR", "MirUD", "Save", "Load"],
+]
+
+# Build a rect for every button label, stacking the rows above the screen bottom.
+BUTTON_RECTS = {} # label -> pygame.Rect
+for row_index, row_labels in enumerate(BUTTON_ROWS):
+    row_w = WIDTH // len(row_labels)
+    row_y = HEIGHT - BUTTON_H * (len(BUTTON_ROWS) - row_index)
+    for i, label in enumerate(row_labels):
+        BUTTON_RECTS[label] = pygame.Rect(i * row_w, row_y, row_w, BUTTON_H)
+
+touch_font = pygame.font.SysFont(None, 18)
+active_fingers = {} # finger_id -> (x, y) in screen space, used for the 2-finger camera drag
+SELECT_MODE = False # False = single tap toggles a cell (default). True = tap+drag makes a rect selection (like holding Rightclick on PC)
+
 def draw_touch_buttons():
+    """Draw the on-screen button bar. No-op if TOUCH_MODE is off."""
     if not TOUCH_MODE:
         return
-    for rect, label in zip(BUTTON_RECTS, BUTTON_LABELS):
-        pygame.draw.rect(screen, (40, 40, 40), rect)
+    for label, rect in BUTTON_RECTS.items():
+        # Highlight the Mode button green while select-mode is active, so it's obvious which mode you're in
+        color = (70, 90, 70) if (label == "Mode" and SELECT_MODE) else (40, 40, 40)
+        pygame.draw.rect(screen, color, rect)
         pygame.draw.rect(screen, (90, 90, 90), rect, 1)
         text = touch_font.render(label, True, (255, 255, 255))
         screen.blit(text, text.get_rect(center=rect.center))
 
-# Handle each Action of the Buttons
 def handle_touch_button(pos):
-    global active, GpS, zoom
+    """
+    If pos hits a button, perform its action and return True.
+    Return False if pos didn't hit any button (caller should then treat it as a normal cell click).
+    """
+    global active, GpS, zoom, has_selection, dragging_selection, alive_selected_cells
+    global clipboard, was_active_before_edit, selecting, SELECT_MODE, SHOW_SETTINGS
     if not TOUCH_MODE:
         return False
-    for rect, label in zip(BUTTON_RECTS, BUTTON_LABELS):
-        if rect.collidepoint(pos):
-            if label == "Play/Pause":
-                active = not active
-            elif label == "Step":
-                if not active:
-                    manage_history("step")
-                    chunk_grid.step(birth_values, survive_values)
-            elif label == "Spd-":
-                GpS = max(1, GpS - 1)
-            elif label == "Spd+":
-                GpS = min(1000, GpS + 1)
-            elif label == "Zoom-":
-                zoom = max(MIN_ZOOM, zoom / 1.2)
-            elif label == "Zoom+":
-                zoom = min(MAX_ZOOM, zoom * 1.2)
-            elif label == "Center":
-                center_cam()
-            elif label == "Undo":
-                manage_history("undo")
-            elif label == "Redo":
-                manage_history("redo")
-            elif label == "Clear":
-                chunk_grid.clear_all()
-                manage_history("reset")
-            return True
+
+    for label, rect in BUTTON_RECTS.items():
+        if not rect.collidepoint(pos):
+            continue
+
+        if label == "Play/Pause":
+            active = not active
+        elif label == "Step":
+            if not active: # Only allow manual stepping while paused, same rule as the 'n' hotkey
+                manage_history("step")
+                chunk_grid.step(birth_values, survive_values)
+        elif label == "Spd-":
+            GpS = max(1, GpS - 1)
+        elif label == "Spd+":
+            GpS = min(1000, GpS + 1)
+        elif label == "Zoom-":
+            zoom = max(MIN_ZOOM, zoom / 1.2)
+        elif label == "Zoom+":
+            zoom = min(MAX_ZOOM, zoom * 1.2)
+        elif label == "Center":
+            center_cam()
+        elif label == "Undo":
+            manage_history("undo")
+        elif label == "Redo":
+            manage_history("redo")
+        elif label == "Clear":
+            chunk_grid.clear_all()
+            manage_history("reset")
+        elif label == "Settings":
+            SHOW_SETTINGS = not SHOW_SETTINGS
+        elif label == "Mode":
+            SELECT_MODE = not SELECT_MODE
+        elif label == "Copy":
+            if has_selection:
+                clipboard = alive_selected_cells.copy()
+                has_selection = False
+                active = was_active_before_edit
+        elif label == "Paste":
+            if paste_cells():
+                redo_history.clear()
+        elif label == "Del":
+            if has_selection:
+                x_min, _, y_min, _ = get_max_min_from_selection()
+                cells_to_delete = original_selected_cells if dragging_selection else alive_selected_cells
+                if cells_to_delete:
+                    history_1_step()
+                    chunk_grid.remove_cells({(dx + x_min, dy + y_min) for (dx, dy) in cells_to_delete})
+                    redo_history.clear()
+                dragging_selection = False
+                has_selection = False
+                active = was_active_before_edit
+        elif label == "RndFill":
+            if has_selection and not dragging_selection:
+                random_fill()
+                has_selection = False
+                active = was_active_before_edit
+        elif label == "RotCW":
+            if clipboard: # Only rotates the clipboard content (not an active drag) to keep this simple on touch
+                clipboard = rotate_cells(clipboard, clockwise=True)
+        elif label == "RotCCW":
+            if clipboard:
+                clipboard = rotate_cells(clipboard, clockwise=False)
+        elif label == "MirLR":
+            if clipboard:
+                clipboard = mirror_cells(clipboard, x_axis=True)
+        elif label == "MirUD":
+            if clipboard:
+                clipboard = mirror_cells(clipboard, x_axis=False)
+        elif label == "Save":
+            if save_rle(SAVING_FILE):
+                print("Saved .rle!")
+        elif label == "Load":
+            chunk_grid.clear_all()
+            chunk_grid.set_cells(load_rle(LOADING_FILE), 1)
+            manage_history("reset")
+            center_cam()
+            print("Loaded .rle!")
+            if has_selection or selecting or dragging_selection:
+                has_selection = False
+                selecting = False
+                dragging_selection = False
+                active = was_active_before_edit
+        return True
     return False
+
+def touch_select_start(pos):
+    """Begin a touch-based rect selection (the SELECT_MODE equivalent of holding Rightclick)."""
+    global start, end, has_selection, selecting, was_active_before_edit, active
+    step = get_step()
+    x = math.floor((pos[0] + camera_x) // step)
+    y = math.floor((pos[1] + camera_y) // step)
+    start = (x, y)
+    end = start
+    has_selection = False
+    selecting = True
+    was_active_before_edit = active
+    active = False
+
+def touch_select_update(pos):
+    """Update the in-progress touch selection rect as the finger drags."""
+    global end
+    if selecting:
+        step = get_step()
+        x = math.floor((pos[0] + camera_x) // step)
+        y = math.floor((pos[1] + camera_y) // step)
+        end = (x, y)
+
+def touch_select_end():
+    """Finish the touch selection and lock in the selected cells."""
+    global selecting, has_selection, alive_selected_cells
+    if selecting:
+        selecting = False
+        has_selection = True
+        alive_selected_cells = get_selection()
+
+# =========================================================================================
+# ---------------- Mobile Settings Overlay (replaces the Tkinter window on Pydroid) ------
+# Tkinter and Pygame can't both own a window on Android, so the Tkinter settings window
+# (see the try/except further down) is replaced on phones by this in-game overlay:
+# 4 text fields (Birth/Survive/Color/Density) you tap to edit via Android's own keyboard.
+# =========================================================================================
+SHOW_SETTINGS = False
+active_field = None # Which field is currently being typed into (None = no field focused)
+FIELD_ORDER = ["birth", "survive", "color", "density"]
+FIELD_LABELS = {
+    "birth": "Birth (e.g. 3)",
+    "survive": "Survive (e.g. 23)",
+    "color": "Color Hex (e.g. f5a9b8)",
+    "density": "Random Fill Density % (0-100)",
+}
+# Field values are seeded from whatever settings_window currently reports (works whether
+# the Tkinter window loaded fine on PC, or the phone-fallback lambdas are active).
+settings_fields = {
+    "birth": "".join(str(n) for n in sorted(birth_values)) if "birth_values" in dir() else "3",
+    "survive": "".join(str(n) for n in sorted(survive_values)) if "survive_values" in dir() else "23",
+    "color": "".join(f"{c:02x}" for c in settings_window.give_cell_color()),
+    "density": str(getattr(settings_window, "density_percent", 37)),
+}
+
+FIELD_RECTS = {}
+_field_y = 100
+for _f in FIELD_ORDER:
+    FIELD_RECTS[_f] = pygame.Rect(50, _field_y, WIDTH - 100, 40)
+    _field_y += 60
+APPLY_RECT = pygame.Rect(50, _field_y + 20, WIDTH - 100, 50)
+settings_font = pygame.font.SysFont(None, 24)
+
+def apply_mobile_settings():
+    """Parse the 4 text fields and push valid values into the running simulation."""
+    global birth_values, survive_values
+    birth = {int(c) for c in settings_fields["birth"] if c.isdigit()}
+    survive = {int(c) for c in settings_fields["survive"] if c.isdigit()}
+    if birth:
+        birth_values = birth
+    if survive:
+        survive_values = survive
+
+    color_str = settings_fields["color"].strip().lstrip("#")
+    if len(color_str) == 6 and all(c.upper() in "0123456789ABCDEF" for c in color_str):
+        rgb = tuple(int(color_str[i:i + 2], 16) for i in (0, 2, 4))
+        settings_window.give_cell_color = lambda rgb=rgb: rgb
+
+    try:
+        density = float(settings_fields["density"])
+        if 0 <= density <= 100:
+            settings_window.density_percent = density
+    except ValueError:
+        pass
+
+def draw_settings_overlay():
+    """Draw the mobile settings overlay (dark background + 4 fields + Apply button)."""
+    if not SHOW_SETTINGS:
+        return
+    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 220))
+    screen.blit(overlay, (0, 0))
+
+    for f in FIELD_ORDER:
+        rect = FIELD_RECTS[f]
+        border_color = (255, 255, 0) if active_field == f else (90, 90, 90)
+        pygame.draw.rect(screen, (30, 30, 30), rect)
+        pygame.draw.rect(screen, border_color, rect, 2)
+        label = settings_font.render(FIELD_LABELS[f], True, (150, 150, 150))
+        screen.blit(label, (rect.x, rect.y - 20))
+        value = settings_font.render(settings_fields[f], True, (255, 255, 255))
+        screen.blit(value, (rect.x + 10, rect.y + 8))
+
+    pygame.draw.rect(screen, (70, 120, 70), APPLY_RECT)
+    apply_text = settings_font.render("Apply & Close", True, (255, 255, 255))
+    screen.blit(apply_text, apply_text.get_rect(center=APPLY_RECT.center))
+
+def handle_settings_click(pos):
+    """
+    If the settings overlay is open, handle a tap on it (field focus or Apply) and
+    return True so the caller swallows the click (never falls through to cell-toggling).
+    Returns False only when the overlay isn't open at all.
+    """
+    global active_field, SHOW_SETTINGS
+    if not SHOW_SETTINGS:
+        return False
+
+    for f in FIELD_ORDER:
+        if FIELD_RECTS[f].collidepoint(pos):
+            active_field = f
+            pygame.key.start_text_input() # Triggers Android's on-screen keyboard
+            pygame.key.set_text_input_rect(FIELD_RECTS[f])
+            return True
+
+    if APPLY_RECT.collidepoint(pos):
+        apply_mobile_settings()
+        SHOW_SETTINGS = False
+        active_field = None
+        pygame.key.stop_text_input()
+        return True
+
+    return True # Any other tap while the overlay is open is swallowed too (modal behaviour)
 
 # Basic GoL stuffies :3
 gen = 0
@@ -162,9 +376,13 @@ def apply_new_rules(birth, survive):
     birth_values = birth
     survive_values = survive
 
-try: 
+# Create the Tkinter settings window on PC. On Android (Pydroid 3), Pygame and Tkinter
+# can't both own a display window in the same process, so Tkinter init fails there -
+# in that case we fall back to stub functions that the Mobile Settings Overlay above
+# feeds into instead (see apply_mobile_settings()).
+try:
     settings_root = settings_window.create_settings_window(apply_new_rules)  # create the root with the settings window
-except Exception:  # If using Pydroid 3: 
+except Exception:  # If using Pydroid 3 (phone):
     settings_root = None
     settings_window.give_checkbox_toggles = lambda: (False, False, False)
     settings_window.give_cell_color = lambda: (245, 169, 184)
@@ -734,6 +952,9 @@ print("  'Hold Rightclick'      = Select")
 print("  'MouseWheel'           = Zoom")
 print("  'Hold MouseWheel'      = Move cam")
 print("  '0-9'                  = Print hotkeys\n")
+print("On phone (Pydroid 3): use the on-screen button bar + the 'Mode' button")
+print("to switch between tap-to-toggle and tap+drag-to-select, plus 2-finger")
+print("drag to move the camera.\n")
 
 # Start of Game / Main Loop
 while game_running:
@@ -752,7 +973,18 @@ while game_running:
         if event.type == pygame.QUIT: # So you can close the Window lol
             game_running = False
 
-        if event.type == pygame.KEYDOWN: # Toggle active
+        if event.type == pygame.KEYDOWN:
+            # While a mobile settings text field is focused, keystrokes go into that
+            # field instead of triggering any of the normal hotkeys below.
+            if active_field is not None:
+                if event.key == pygame.K_BACKSPACE:
+                    settings_fields[active_field] = settings_fields[active_field][:-1]
+                elif event.key == pygame.K_RETURN:
+                    active_field = None
+                    pygame.key.stop_text_input()
+                continue
+
+            # Toggle active
             if event.key == pygame.K_SPACE and not has_selection and not selecting and not dragging_selection:
                 active = not active
             if event.key == pygame.K_k and event.mod & pygame.KMOD_CTRL: # Save
@@ -822,8 +1054,13 @@ while game_running:
 
         if event.type == pygame.MOUSEBUTTONDOWN: # Get click input and turn them into board pos + color them with board
             if event.button == 1:  # Leftclick
+                if handle_settings_click(event.pos):
+                    continue # Settings overlay swallowed this click
                 if handle_touch_button(event.pos):
-                    continue # Was a Button click
+                    continue # Was a button-bar click
+                if SELECT_MODE and not has_selection and not dragging_selection:
+                    touch_select_start(event.pos)
+                    continue
                 if click_cell():
                     redo_history.clear()
             if event.button == 2: # Middle Drag Cam
@@ -833,6 +1070,8 @@ while game_running:
         if event.type == pygame.MOUSEBUTTONUP: # Cam drag
             if event.button == 2:
                 dragging = False
+            if event.button == 1 and SELECT_MODE and selecting:
+                touch_select_end()
 
         if event.type == pygame.MOUSEMOTION:
             if dragging: # Cam drag
@@ -845,8 +1084,10 @@ while game_running:
                 camera_y -= dy
 
                 last_mouse_pos = (mx, my)
+            if SELECT_MODE and selecting:
+                touch_select_update(event.pos)
 
-        # Phone Finger Controls
+        # Phone Finger Controls (multi-touch camera pan)
         if event.type == pygame.FINGERDOWN:
             active_fingers[event.finger_id] = (event.x * WIDTH, event.y * HEIGHT)
         if event.type == pygame.FINGERUP:
@@ -855,11 +1096,15 @@ while game_running:
             old_pos = active_fingers.get(event.finger_id)
             new_pos = (event.x * WIDTH, event.y * HEIGHT)
             active_fingers[event.finger_id] = new_pos
-            if len(active_fingers) == 2 and old_pos is not None:
+            if len(active_fingers) == 2 and old_pos is not None: # Only pan while exactly 2 fingers are down
                 dx = new_pos[0] - old_pos[0]
                 dy = new_pos[1] - old_pos[1]
                 camera_x -= dx
                 camera_y -= dy
+
+        # Text typed into a focused mobile settings field (fed by Android's on-screen keyboard)
+        if event.type == pygame.TEXTINPUT and active_field is not None:
+            settings_fields[active_field] += event.text
 
         if event.type == pygame.MOUSEWHEEL: # Scroll to Zoom relative to the mouse pos
             mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -912,7 +1157,8 @@ while game_running:
     birth_str = "".join(str(n) for n in sorted(birth_values))
     survive_str = "".join(str(n) for n in sorted(survive_values))
     pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={chunk_grid.total_alive_count()} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active}") # Update Data
-    draw_touch_buttons()  # Drawing the Phone Buttons
+    draw_touch_buttons()   # Drawing the phone button bar
+    draw_settings_overlay() # Drawing the mobile settings overlay (only visible when SHOW_SETTINGS is True)
     pygame.display.flip()
 
 pygame.quit()
