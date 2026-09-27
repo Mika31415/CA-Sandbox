@@ -41,18 +41,20 @@ NUMPAD_HOTKEYS = {
     pygame.K_9: "Numpad/60p_xor_gate.rle", # Hotkey Numpad 9
     pygame.K_0: "Numpad/"  # Hotkey Numpad 0
 }
-LOADING_FILE = "RLE/half_adder.rle" # Change if you want a different loaded .rle file
+LOADING_FILE = "RLE/OCTA.rle" # Change if you want a different loaded .rle file
 SAVING_FILE = "RLE/game.rle" # Change if you want a different filename for the saved .rle
 
 WIDTH = 1000 # Game Window Width | Base = 1000
 HEIGHT = 1000 # Game Window Height | Base = 1000
 
-MIN_ZOOM = 0.055 # Minimum Zoom Level | Base = 0.055
+MIN_ZOOM = 0.0001 # Minimum Zoom Level | Base = 0.055
 MAX_ZOOM = 10.0 # Maximum Zoom Level | Base = 10.0
 CAM_CENTER_EVERY_GEN = 10 # Center the cam every X generations (for performance reasons) | Base = 10
 
 HISTORY_LIMIT = 10000 # Limit of the Undo/Redo History
 HISTORY_SAVE_EVERY_GEN = 10 # Save history every X generations (for performance reasons) | Base = 10 | In the Future 1
+
+RANDOM_FILL_MAX_CELLS = 100000 # Maximum of Cells being randomly pasted at once | Base 100000
 # ------------------------------------------------------------------------------------------------------
 
 # Create Game Window + Base Values / Setup
@@ -60,6 +62,58 @@ pygame.init()
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
+
+# ---------------- Touch Controls (Handy) ----------------
+TOUCH_MODE = True # False = No Buttons (e.g. PC)
+BUTTON_H = 60
+BUTTON_LABELS = ["Play/Pause", "Step", "Spd-", "Spd+", "Zoom-", "Zoom+", "Center", "Undo", "Redo", "Clear"]
+BUTTON_W = WIDTH // len(BUTTON_LABELS)
+BUTTON_RECTS = [pygame.Rect(i * BUTTON_W, HEIGHT - BUTTON_H, BUTTON_W, BUTTON_H) for i in range(len(BUTTON_LABELS))]
+touch_font = pygame.font.SysFont(None, 20)
+active_fingers = {} # finger_id -> (x, y) for Drag with 2 Fingers
+
+# Draw each button
+def draw_touch_buttons():
+    if not TOUCH_MODE:
+        return
+    for rect, label in zip(BUTTON_RECTS, BUTTON_LABELS):
+        pygame.draw.rect(screen, (40, 40, 40), rect)
+        pygame.draw.rect(screen, (90, 90, 90), rect, 1)
+        text = touch_font.render(label, True, (255, 255, 255))
+        screen.blit(text, text.get_rect(center=rect.center))
+
+# Handle each Action of the Buttons
+def handle_touch_button(pos):
+    global active, GpS, zoom
+    if not TOUCH_MODE:
+        return False
+    for rect, label in zip(BUTTON_RECTS, BUTTON_LABELS):
+        if rect.collidepoint(pos):
+            if label == "Play/Pause":
+                active = not active
+            elif label == "Step":
+                if not active:
+                    manage_history("step")
+                    chunk_grid.step(birth_values, survive_values)
+            elif label == "Spd-":
+                GpS = max(1, GpS - 1)
+            elif label == "Spd+":
+                GpS = min(1000, GpS + 1)
+            elif label == "Zoom-":
+                zoom = max(MIN_ZOOM, zoom / 1.2)
+            elif label == "Zoom+":
+                zoom = min(MAX_ZOOM, zoom * 1.2)
+            elif label == "Center":
+                center_cam()
+            elif label == "Undo":
+                manage_history("undo")
+            elif label == "Redo":
+                manage_history("redo")
+            elif label == "Clear":
+                chunk_grid.clear_all()
+                manage_history("reset")
+            return True
+    return False
 
 # Basic GoL stuffies :3
 gen = 0
@@ -108,7 +162,13 @@ def apply_new_rules(birth, survive):
     birth_values = birth
     survive_values = survive
 
-settings_root = settings_window.create_settings_window(apply_new_rules) # create the root with the settings window
+try: 
+    settings_root = settings_window.create_settings_window(apply_new_rules)  # create the root with the settings window
+except Exception:  # If using Pydroid 3: 
+    settings_root = None
+    settings_window.give_checkbox_toggles = lambda: (False, False, False)
+    settings_window.give_cell_color = lambda: (245, 169, 184)
+    settings_window.density_percent = 37
 
 # Update the GpS on Key Input
 def update_speed(GpS, keys):
@@ -132,7 +192,7 @@ def update_speed(GpS, keys):
 # IN DA FUTURE MOVE THE 3 HELPY HELPERS HELP FUNCS IN A DIFFERENT MODULE / FILE
 # Another helpy func with gives the step num
 def get_step():
-    return max(1, round(cell_size * zoom))
+    return cell_size * zoom
 
 # A lil help function to get the mouse pos in world cordinates
 def get_mouse_world_pos():
@@ -171,7 +231,7 @@ def center_cam():
     camera_y = center_y * zoom - HEIGHT / 2
 
 # Save the game state with "Ctrl + s"
-def save_rle(file):
+def save_rle(file): # Move save / load in a different Module
     bbox = chunk_grid.global_bbox()
     if not bbox: # If no alive cells on the board, don't save
         return False
@@ -334,6 +394,15 @@ def draw_cells_from_grid():
     cx_start, cx_end = view_min_x // size, (view_max_x - 1) // size
     cy_start, cy_end = view_min_y // size, (view_max_y - 1) // size
 
+    min_x, min_y, max_x, max_y = bbox
+    bbox_cx_start, bbox_cx_end = min_x // size, max_x // size
+    bbox_cy_start, bbox_cy_end = min_y // size, max_y // size
+
+    cx_start = max(cx_start, bbox_cx_start)
+    cx_end = min(cx_end, bbox_cx_end)
+    cy_start = max(cy_start, bbox_cy_start)
+    cy_end = min(cy_end, bbox_cy_end)
+
     cell_color = settings_window.give_cell_color()
 
     for cx in range(cx_start, cx_end + 1):
@@ -356,13 +425,22 @@ def draw_cells_from_grid():
             if not visible.any():
                 continue
 
-            scaled = np.kron(visible, np.ones((step, step), dtype=np.uint8))
-            rgb = np.stack([scaled*cell_color[0], scaled*cell_color[1], scaled*cell_color[2]], axis=-1)
+            rgb = np.stack([visible*cell_color[0], visible*cell_color[1], visible*cell_color[2]], axis=-1)
             surf = pygame.surfarray.make_surface(rgb.swapaxes(0,1))
 
-            screen_x = round((chunk_world_x + x_start) * step - camera_x)
-            screen_y = round((chunk_world_y + y_start) * step - camera_y)
-            screen.blit(surf, (screen_x, screen_y))
+            # Round the screen-space edges first, then derive size from them to prevent lines through the shapes
+            screen_x_start = round((chunk_world_x + x_start) * step - camera_x)
+            screen_x_end = round((chunk_world_x + x_end) * step - camera_x)
+            screen_y_start = round((chunk_world_y + y_start) * step - camera_y)
+            screen_y_end = round((chunk_world_y + y_end) * step - camera_y)
+
+            target_w = max(1, screen_x_end - screen_x_start)
+            target_h = max(1, screen_y_end - screen_y_start)
+
+            if (target_w, target_h) != (x_end - x_start, y_end - y_start):
+                surf = pygame.transform.scale(surf, (target_w, target_h))
+
+            screen.blit(surf, (screen_x_start, screen_y_start))
 
 # Helpy functions for rotate/drag
 def get_center_for(thing):
@@ -533,13 +611,13 @@ def draw_paste_preview():
     xs = [dx + x for dx, _ in clipboard]
     ys = [dy + y for _, dy in clipboard]
     min_x, min_y = min(xs), min(ys)
-    width = (max(xs) - min_x + 1) * step
-    height = (max(ys) - min_y + 1) * step
+    width = round((max(xs) - min_x + 1) * step)
+    height = round((max(ys) - min_y + 1) * step)
 
-    overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+    overlay = pygame.Surface((max(1, width), max(1, height)), pygame.SRCALPHA)
     for dx, dy in clipboard:
-        px, py = (dx + x - min_x) * step, (dy + y - min_y) * step
-        overlay.fill(cell_color_rgba, pygame.Rect(px, py, step, step))
+        px, py = round((dx + x - min_x) * step), round((dy + y - min_y) * step)
+        overlay.fill(cell_color_rgba, pygame.Rect(px, py, max(1, round(step)), max(1, round(step))))
 
     screen.blit(overlay, (round(min_x * step - camera_x), round(min_y * step - camera_y)))
 
@@ -559,7 +637,7 @@ def draw_drag_preview():
             new_x = absolute_x + delta_x
             new_y = absolute_y + delta_y
 
-            fill_surface = pygame.Surface((round(step), round(step)), pygame.SRCALPHA)
+            fill_surface = pygame.Surface((max(1, round(step)), max(1, round(step))), pygame.SRCALPHA)
             cell_color_rgb = settings_window.give_cell_color()
             cell_color_rgba = (*cell_color_rgb, 80)
             fill_surface.fill(cell_color_rgba)  # RGBA color_hex
@@ -574,7 +652,7 @@ def _reset_selection_state(): # Clear any selection/drag state so it can't refer
         active = was_active_before_edit
 
 # UPDATE HISTORY LATER FOR ACTUAL UNDO ETC
-def history_1_step():
+def history_1_step(): # Move the 4 History Funcs in a "History" Module
     global history, redo_history
     history.append(gen)
     redo_history.clear()
@@ -617,6 +695,7 @@ def random_fill():
     # Convert % in int for the loop
     max_cells = (x_max + 1 - x_min) * (y_max + 1 - y_min)
     density = round(max(1, (max_cells * density_percent) / 100))
+    density = min(density, RANDOM_FILL_MAX_CELLS) # Clamp cap, for anti crash reasons
 
     added_cells = {(random.randrange(x_min, x_max + 1),random.randrange(y_min, y_max + 1)) for _ in range(density)} # Add prevention for multiple cells at 1 spot
 
@@ -659,16 +738,17 @@ print("  '0-9'                  = Print hotkeys\n")
 # Start of Game / Main Loop
 while game_running:
     show_preview, disable_grid, cam_in_center = settings_window.give_checkbox_toggles()
-    try:
-        settings_root.update()
-    except tk.TclError:
-        pass
+    if settings_root is not None:  # Protection for if it runs on Pydroid 3 (Phone)
+        try: 
+            settings_root.update()
+        except tk.TclError:
+            pass
 
     keys = pygame.key.get_pressed() # Setup the key events
 
     screen.fill((0, 0, 0)) # Make everything black
 
-    for event in pygame.event.get(): 
+    for event in pygame.event.get(): # Move in "Input" Module in future
         if event.type == pygame.QUIT: # So you can close the Window lol
             game_running = False
 
@@ -742,6 +822,8 @@ while game_running:
 
         if event.type == pygame.MOUSEBUTTONDOWN: # Get click input and turn them into board pos + color them with board
             if event.button == 1:  # Leftclick
+                if handle_touch_button(event.pos):
+                    continue # Was a Button click
                 if click_cell():
                     redo_history.clear()
             if event.button == 2: # Middle Drag Cam
@@ -763,6 +845,21 @@ while game_running:
                 camera_y -= dy
 
                 last_mouse_pos = (mx, my)
+
+        # Phone Finger Controls
+        if event.type == pygame.FINGERDOWN:
+            active_fingers[event.finger_id] = (event.x * WIDTH, event.y * HEIGHT)
+        if event.type == pygame.FINGERUP:
+            active_fingers.pop(event.finger_id, None)
+        if event.type == pygame.FINGERMOTION:
+            old_pos = active_fingers.get(event.finger_id)
+            new_pos = (event.x * WIDTH, event.y * HEIGHT)
+            active_fingers[event.finger_id] = new_pos
+            if len(active_fingers) == 2 and old_pos is not None:
+                dx = new_pos[0] - old_pos[0]
+                dy = new_pos[1] - old_pos[1]
+                camera_x -= dx
+                camera_y -= dy
 
         if event.type == pygame.MOUSEWHEEL: # Scroll to Zoom relative to the mouse pos
             mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -791,7 +888,7 @@ while game_running:
     draw_drag_preview() # Draw the drag preview if dragging selection
 
     if not disable_grid:
-        if cell_size * zoom >= 4:
+        if cell_size * zoom >= 2:
             draw_grid(line_width) # draw board grid above
 
     draw_selection() # draw the selection rect (right click stuffy) if selecting or has selection
@@ -815,6 +912,7 @@ while game_running:
     birth_str = "".join(str(n) for n in sorted(birth_values))
     survive_str = "".join(str(n) for n in sorted(survive_values))
     pygame.display.set_caption(f"Rule = B{birth_str}/S{survive_str} | Gen = {gen} | Alive={chunk_grid.total_alive_count()} | GpS = {GpS} | FPS = {clock.get_fps():.1f} | Running = {active}") # Update Data
+    draw_touch_buttons()  # Drawing the Phone Buttons
     pygame.display.flip()
 
 pygame.quit()

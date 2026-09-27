@@ -82,31 +82,6 @@ def remove_cells(cells):
             chunk[list(local_ys), list(local_xs)] = 0
             _cleanup_if_empty(cx, cy)
 
-# Function to give each alive cell in a chosen rect
-def iterate_alive_in_rect(x0, y0, x1, y1):
-    x_min, x_max = min(x0, x1), max(x0, x1)
-    y_min, y_max = min(y0, y1), max(y0, y1)
-
-    cx_start,_,_,_ = _world_to_chunk(x_min, y_min)
-    cx_end,_,_,_ = _world_to_chunk(x_max, y_max)
-    _,cy_start,_,_ = _world_to_chunk(x_min, y_min)
-    _,cy_end,_,_ = _world_to_chunk(x_max, y_max)
-
-    alive_cells = set()
-
-    for cx in range(cx_start, cx_end + 1):
-        for cy in range(cy_start, cy_end + 1):
-            chunk = _get_or_create_chunk(cx, cy, create=False)
-            if chunk is not None:
-                ys, xs = np.nonzero(chunk)
-                world_xs = cx * CHUNK_SIZE + xs
-                world_ys = cy * CHUNK_SIZE + ys
-                mask = (world_xs >= x_min) & (world_xs <= x_max) & (world_ys >= y_min) & (world_ys <= y_max)
-                for wx, wy in zip(world_xs[mask], world_ys[mask]):
-                    alive_cells.add((int(wx), int(wy)))
-
-    return alive_cells
-
 # Function to get the min/max box of all alive cells in the chunk system
 def global_bbox():
     if not chunks:
@@ -127,6 +102,45 @@ def global_bbox():
             max_y = max(max_y, int(world_ys.max()))
 
     return int(min_x), int(min_y), int(max_x), int(max_y)
+
+# Function to give each alive cell in a chosen rect
+def iterate_alive_in_rect(x0, y0, x1, y1):
+    x_min, x_max = min(x0, x1), max(x0, x1)
+    y_min, y_max = min(y0, y1), max(y0, y1)
+
+    cx_start,_,_,_ = _world_to_chunk(x_min, y_min)
+    cx_end,_,_,_ = _world_to_chunk(x_max, y_max)
+    _,cy_start,_,_ = _world_to_chunk(x_min, y_min)
+    _,cy_end,_,_ = _world_to_chunk(x_max, y_max)
+
+    bbox = global_bbox()
+    if bbox is None:
+        return set()
+    bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y = bbox
+    bbox_cx_start,_,_,_ = _world_to_chunk(bbox_min_x, bbox_min_y)
+    bbox_cx_end,_,_,_ = _world_to_chunk(bbox_max_x, bbox_max_y)
+    _,bbox_cy_start,_,_ = _world_to_chunk(bbox_min_x, bbox_min_y)
+    _,bbox_cy_end,_,_ = _world_to_chunk(bbox_max_x, bbox_max_y)
+
+    cx_start = max(cx_start, bbox_cx_start)
+    cx_end = min(cx_end, bbox_cx_end)
+    cy_start = max(cy_start, bbox_cy_start)
+    cy_end = min(cy_end, bbox_cy_end)
+
+    alive_cells = set()
+
+    for cx in range(cx_start, cx_end + 1):
+        for cy in range(cy_start, cy_end + 1):
+            chunk = _get_or_create_chunk(cx, cy, create=False)
+            if chunk is not None:
+                ys, xs = np.nonzero(chunk)
+                world_xs = cx * CHUNK_SIZE + xs
+                world_ys = cy * CHUNK_SIZE + ys
+                mask = (world_xs >= x_min) & (world_xs <= x_max) & (world_ys >= y_min) & (world_ys <= y_max)
+                for wx, wy in zip(world_xs[mask], world_ys[mask]):
+                    alive_cells.add((int(wx), int(wy)))
+
+    return alive_cells
 
 # Function to get the alive cells on the whole grid
 def total_alive_count():
@@ -217,13 +231,17 @@ def step(birth_values, survive_values):
         if not np.array_equal(new_grids[key], chunks[key]):
             chunks[key] = new_grids[key]
             _dirty_chunks.add(key)
-        if chunks[key].sum() == 0:
+        if not chunks[key].any():
             del chunks[key]
             _dirty_chunks.add(key)
 
 # Function to get all chunks that changed since the last checkpoint
 def get_dirty_since_checkpoint():
     return set(_dirty_chunks)
+
+# Function to revert the undo etc
+def restore_chunks(diff):
+    pass # WIP
 
 # Function to clear the dirty tracking after a checkpoint has been saved
 def clear_dirty():
@@ -236,4 +254,3 @@ def clear_all():
     _dirty_chunks.clear()
 
 # Add Quiescence Detection Later (if needed) to optimize the simulation by skipping updates for chunks that haven't changed.
-
