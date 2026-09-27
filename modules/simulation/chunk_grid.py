@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 
 # Custom Modules
-import modules.ux.settings_window as settings_window
+import modules.ux_ui.settings_window as settings_window
 
 # Global Variables
 chunks = {}

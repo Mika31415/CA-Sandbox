@@ -7,7 +7,7 @@ from collections import deque
 import tkinter as tk
 
 # Own Modules
-import modules.ux.settings_window as settings_window
+import modules.ux_ui.settings_window as settings_window
 import modules.simulation.chunk_grid as chunk_grid
 
 # Ma Todo List for the entier Project :3333
@@ -63,17 +63,11 @@ pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 
-# =========================================================================================
-# ---------------- Touch Controls (Phone / Pydroid 3) ----------------
-# This whole section is additive: on PC it just draws an extra button bar that you
-# can ignore (or disable via TOUCH_MODE = False). On a phone (no keyboard/mouse-wheel/
-# middle-click) it's the only way to reach Play/Pause, Step, Speed, Zoom, Undo/Redo,
-# Clear, Copy/Paste/Delete/RandomFill/Rotate/Mirror/Save/Load and the Settings screen.
-# =========================================================================================
+# ---------------- Touch Controls (Phone / Pydroid 3) ---------------- In future a own Module
 TOUCH_MODE = False # Set to False to hide the button bar entirely (e.g. always-PC builds)
 BUTTON_H = 50 # Height (in px) of a single button row
 
-# Two rows of buttons. Row 0 = core simulation controls, Row 1 = selection/clipboard/file controls.
+# Two rows of buttons
 BUTTON_ROWS = [
     ["Play/Pause", "Step", "1Spd-", "1Spd+", "10Spd-", "10Spd+", "Zoom-", "Zoom+", "Center", "Undo", "Redo", "Clear"],
     ["Settings", "Mode", "Copy", "Paste", "Del", "RndFill", "RotCW", "RotCCW", "MirLR", "MirUD", "Save", "Load"],
@@ -117,87 +111,88 @@ def handle_touch_button(pos):
         if not rect.collidepoint(pos):
             continue
 
-        if label == "Play/Pause":
-            active = not active
-        elif label == "Step":
-            if not active: # Only allow manual stepping while paused, same rule as the 'n' hotkey
-                manage_history("step")
-                chunk_grid.step(birth_values, survive_values)
-        elif label == "1Spd-":
-            GpS = max(1, GpS - 1)
-        elif label == "1Spd+":
-            GpS = min(1000, GpS + 1)
-        elif label == "10Spd-":
-            GpS = max(1, GpS - 10)
-        elif label == "10Spd+":
-            GpS = min(1000, GpS + 10)
-        elif label == "Zoom-":
-            zoom = max(MIN_ZOOM, zoom / 1.2)
-        elif label == "Zoom+":
-            zoom = min(MAX_ZOOM, zoom * 1.2)
-        elif label == "Center":
-            center_cam()
-        elif label == "Undo":
-            manage_history("undo")
-        elif label == "Redo":
-            manage_history("redo")
-        elif label == "Clear":
-            chunk_grid.clear_all()
-            manage_history("reset")
-        elif label == "Settings":
-            SHOW_SETTINGS = not SHOW_SETTINGS
-        elif label == "Mode":
-            SELECT_MODE = not SELECT_MODE
-        elif label == "Copy":
-            if has_selection:
-                clipboard = alive_selected_cells.copy()
-                has_selection = False
-                active = was_active_before_edit
-        elif label == "Paste":
-            if paste_cells():
-                redo_history.clear()
-        elif label == "Del":
-            if has_selection:
-                x_min, _, y_min, _ = get_max_min_from_selection()
-                cells_to_delete = original_selected_cells if dragging_selection else alive_selected_cells
-                if cells_to_delete:
-                    history_1_step()
-                    chunk_grid.remove_cells({(dx + x_min, dy + y_min) for (dx, dy) in cells_to_delete})
+        match label:
+            case "Play/Pause":
+                active = not active
+            case "Step":
+                if not active: # Only allow manual stepping while paused, same rule as the 'n' hotkey
+                    manage_history("step")
+                    chunk_grid.step(birth_values, survive_values)
+            case "1Spd-":
+                GpS = max(1, GpS - 1)
+            case "1Spd+":
+                GpS = min(1000, GpS + 1)
+            case "10Spd-":
+                GpS = max(1, GpS - 10)
+            case "10Spd+":
+                GpS = min(1000, GpS + 10)
+            case "Zoom-":
+                zoom = max(MIN_ZOOM, zoom / 1.2)
+            case "Zoom+":
+                zoom = min(MAX_ZOOM, zoom * 1.2)
+            case "Center":
+                center_cam()
+            case "Undo":
+                manage_history("undo")
+            case "Redo":
+                manage_history("redo")
+            case "Clear":
+                chunk_grid.clear_all()
+                manage_history("reset")
+            case "Settings":
+                SHOW_SETTINGS = not SHOW_SETTINGS
+            case "Mode":
+                SELECT_MODE = not SELECT_MODE
+            case "Copy":
+                if has_selection:
+                    clipboard = alive_selected_cells.copy()
+                    has_selection = False
+                    active = was_active_before_edit
+            case "Paste":
+                if paste_cells():
                     redo_history.clear()
-                dragging_selection = False
-                has_selection = False
-                active = was_active_before_edit
-        elif label == "RndFill":
-            if has_selection and not dragging_selection:
-                random_fill()
-                has_selection = False
-                active = was_active_before_edit
-        elif label == "RotCW":
-            if clipboard: # Only rotates the clipboard content (not an active drag) to keep this simple on touch
-                clipboard = rotate_cells(clipboard, clockwise=True)
-        elif label == "RotCCW":
-            if clipboard:
-                clipboard = rotate_cells(clipboard, clockwise=False)
-        elif label == "MirLR":
-            if clipboard:
-                clipboard = mirror_cells(clipboard, x_axis=True)
-        elif label == "MirUD":
-            if clipboard:
-                clipboard = mirror_cells(clipboard, x_axis=False)
-        elif label == "Save":
-            if save_rle(SAVING_FILE):
-                print("Saved .rle!")
-        elif label == "Load":
-            chunk_grid.clear_all()
-            chunk_grid.set_cells(load_rle(LOADING_FILE), 1)
-            manage_history("reset")
-            center_cam()
-            print("Loaded .rle!")
-            if has_selection or selecting or dragging_selection:
-                has_selection = False
-                selecting = False
-                dragging_selection = False
-                active = was_active_before_edit
+            case "Del":
+                if has_selection:
+                    x_min, _, y_min, _ = get_max_min_from_selection()
+                    cells_to_delete = original_selected_cells if dragging_selection else alive_selected_cells
+                    if cells_to_delete:
+                        history_1_step()
+                        chunk_grid.remove_cells({(dx + x_min, dy + y_min) for (dx, dy) in cells_to_delete})
+                        redo_history.clear()
+                    dragging_selection = False
+                    has_selection = False
+                    active = was_active_before_edit
+            case "RndFill":
+                if has_selection and not dragging_selection:
+                    random_fill()
+                    has_selection = False
+                    active = was_active_before_edit
+            case "RotCW":
+                if clipboard: # Only rotates the clipboard content (not an active drag) to keep this simple on touch
+                    clipboard = rotate_cells(clipboard, clockwise=True)
+            case "RotCCW":
+                if clipboard:
+                    clipboard = rotate_cells(clipboard, clockwise=False)
+            case "MirLR":
+                if clipboard:
+                    clipboard = mirror_cells(clipboard, x_axis=True)
+            case "MirUD":
+                if clipboard:
+                    clipboard = mirror_cells(clipboard, x_axis=False)
+            case "Save":
+                if save_rle(SAVING_FILE):
+                    print("Saved .rle!")
+            case "Load":
+                chunk_grid.clear_all()
+                chunk_grid.set_cells(load_rle(LOADING_FILE), 1)
+                manage_history("reset")
+                center_cam()
+                print("Loaded .rle!")
+                if has_selection or selecting or dragging_selection:
+                    has_selection = False
+                    selecting = False
+                    dragging_selection = False
+                    active = was_active_before_edit
         return True
     return False
 
@@ -231,12 +226,7 @@ def touch_select_end():
         has_selection = True
         alive_selected_cells = get_selection()
 
-# =========================================================================================
 # ---------------- Mobile Settings Overlay (replaces the Tkinter window on Pydroid) ------
-# Tkinter and Pygame can't both own a window on Android, so the Tkinter settings window
-# (see the try/except further down) is replaced on phones by this in-game overlay:
-# 4 text fields (Birth/Survive/Color/Density) you tap to edit via Android's own keyboard.
-# =========================================================================================
 SHOW_SETTINGS = False
 active_field = None # Which field is currently being typed into (None = no field focused)
 FIELD_ORDER = ["birth", "survive", "color", "density"]
@@ -380,10 +370,6 @@ def apply_new_rules(birth, survive):
     birth_values = birth
     survive_values = survive
 
-# Create the Tkinter settings window on PC. On Android (Pydroid 3), Pygame and Tkinter
-# can't both own a display window in the same process, so Tkinter init fails there -
-# in that case we fall back to stub functions that the Mobile Settings Overlay above
-# feeds into instead (see apply_mobile_settings()).
 try:
     settings_root = settings_window.create_settings_window(apply_new_rules)  # create the root with the settings window
 except Exception:  # If using Pydroid 3 (phone):
